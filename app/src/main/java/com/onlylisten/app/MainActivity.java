@@ -3,6 +3,7 @@ package com.onlylisten.app;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.NotificationManager;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.ClipboardManager;
@@ -13,22 +14,20 @@ import android.graphics.Color;
 import android.media.AudioDeviceCallback;
 import android.media.AudioDeviceInfo;
 import android.media.AudioManager;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
-import android.text.InputFilter;
-import android.text.InputType;
 import android.util.Base64;
 import android.view.View;
 import android.view.WindowInsets;
 import android.widget.Button;
-import android.widget.EditText;
 import android.widget.ImageButton;
-import android.widget.LinearLayout;
-import android.widget.ScrollView;
 import android.widget.TextView;
 
 import org.json.JSONObject;
@@ -84,6 +83,8 @@ public final class MainActivity extends Activity {
         });
         root.requestApplyInsets();
         preferences = getSharedPreferences("bluetooth_policy", MODE_PRIVATE);
+        getSystemService(NotificationManager.class).cancel(41);
+        getSystemService(NotificationManager.class).deleteNotificationChannel("wireless-pairing");
         audio = getSystemService(AudioManager.class);
         powerButton = findViewById(R.id.power_button);
         setupButton = findViewById(R.id.setup_button);
@@ -96,6 +97,18 @@ public final class MainActivity extends Activity {
         refresh = () -> {
             if (closing || isDestroyed()) {
                 return;
+            }
+            String pairingResult = preferences.getString("adb_pairing_result", null);
+            if (pairingResult != null) {
+                statusMessage = pairingResult;
+                preferences.edit().remove("adb_pairing_result").apply();
+            }
+            if (!busy && preferences.getBoolean("adb_pairing_completed", false)) {
+                preferences.edit().remove("adb_pairing_completed").apply();
+                main.post(() -> {
+                    requestedAction = "status";
+                    runCommand.run();
+                });
             }
             boolean granted = checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)
                     == PackageManager.PERMISSION_GRANTED;
@@ -188,23 +201,13 @@ public final class MainActivity extends Activity {
                         adb = new WirelessAdbManager(getApplicationContext());
                     }
                     if (!adb.isConnected()) {
-                        int port = preferences.getInt("adb_connect_port", -1);
-                        if (port > 0) {
-                            try {
-                                adb.connect("127.0.0.1", port);
-                            } catch (Exception ignored) {
-                                adb.disconnect();
-                            }
+                        WifiManager wifi = getApplicationContext().getSystemService(WifiManager.class);
+                        if (wifi != null) {
+                            multicast = wifi.createMulticastLock("onlylisten-discovery");
+                            multicast.setReferenceCounted(false);
+                            multicast.acquire();
                         }
-                        if (!adb.isConnected()) {
-                            WifiManager wifi = getApplicationContext().getSystemService(WifiManager.class);
-                            if (wifi != null) {
-                                multicast = wifi.createMulticastLock("onlylisten-discovery");
-                                multicast.setReferenceCounted(false);
-                                multicast.acquire();
-                            }
-                            adb.connectTls(getApplicationContext(), 7000);
-                        }
+                        adb.connectTls(getApplicationContext(), 7000);
                     }
                     if (!adb.isConnected()) {
                         throw new IllegalStateException("무선 디버깅 연결에 실패했습니다. 연결 설정에서 디버깅을 켜고 다시 연결해 주세요.");
@@ -355,123 +358,37 @@ public final class MainActivity extends Activity {
                 requestPermissions(missing.toArray(new String[0]), 100);
                 return;
             }
-            int padding = Math.round(20 * getResources().getDisplayMetrics().density);
-            LinearLayout content = new LinearLayout(this);
-            content.setOrientation(LinearLayout.VERTICAL);
-            content.setPadding(padding, padding / 2, padding, 0);
-            TextView instructions = new TextView(this);
-            instructions.setText("별도 앱 설치 없이 이 휴대폰의 무선 디버깅에 연결합니다.\n\n"
-                    + "1. 휴대폰을 Wi-Fi에 연결하고 개발자 옵션의 무선 디버깅을 켜 주세요.\n"
-                    + "2. 설정과 OnlyListen을 분할 화면으로 열어 주세요.\n"
-                    + "3. ‘페어링 코드로 기기 페어링’을 누르고 표시된 포트와 6자리 코드를 입력해 주세요.\n\n"
-                    + "이미 페어링했다면 포트·코드를 비우고 다시 연결을 눌러도 됩니다. 연결 포트는 자동 탐색 실패 시에만 입력합니다.");
-            content.addView(instructions);
-            EditText pairPort = new EditText(this);
-            pairPort.setHint("페어링 포트 · 예: 37123");
-            pairPort.setInputType(InputType.TYPE_CLASS_NUMBER);
-            pairPort.setFilters(new InputFilter[]{new InputFilter.LengthFilter(5)});
-            content.addView(pairPort);
-            EditText pairCode = new EditText(this);
-            pairCode.setHint("6자리 페어링 코드");
-            pairCode.setInputType(InputType.TYPE_CLASS_NUMBER);
-            pairCode.setFilters(new InputFilter[]{new InputFilter.LengthFilter(6)});
-            content.addView(pairCode);
-            EditText connectPort = new EditText(this);
-            connectPort.setHint("연결 포트 · 자동 탐색이 안 될 때만");
-            connectPort.setInputType(InputType.TYPE_CLASS_NUMBER);
-            connectPort.setFilters(new InputFilter[]{new InputFilter.LengthFilter(5)});
-            int savedPort = preferences.getInt("adb_connect_port", -1);
-            if (savedPort > 0) {
-                connectPort.setText(String.valueOf(savedPort));
+            ConnectivityManager networks = getSystemService(ConnectivityManager.class);
+            boolean hasWifi = false;
+            if (networks != null) {
+                for (Network network : networks.getAllNetworks()) {
+                    NetworkCapabilities capabilities = networks.getNetworkCapabilities(network);
+                    if (capabilities != null && capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                        hasWifi = true;
+                        break;
+                    }
+                }
             }
-            content.addView(connectPort);
-            ScrollView setupScroll = new ScrollView(this);
-            setupScroll.addView(content, new ScrollView.LayoutParams(
-                    ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
-            AlertDialog setup = new AlertDialog.Builder(this)
-                    .setTitle("최초 연결 설정").setView(setupScroll)
-                    .setPositiveButton("연결", null)
-                    .setNeutralButton("개발자 옵션", null)
-                    .setNegativeButton("닫기", null).create();
-            setup.setOnShowListener(ignored -> {
-                setup.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(button -> {
-                    try {
-                        startActivity(new Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS));
-                    } catch (ActivityNotFoundException error) {
-                        startActivity(new Intent(Settings.ACTION_SETTINGS));
-                    }
-                });
-                setup.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(button -> {
-                    String portText = pairPort.getText().toString().trim();
-                    String code = pairCode.getText().toString().trim();
-                    String connectText = connectPort.getText().toString().trim();
-                    int pairingPort = -1;
-                    int connectionPort = -1;
-                    try {
-                        if (!portText.isEmpty() || !code.isEmpty()) {
-                            pairingPort = Integer.parseInt(portText);
-                            if (pairingPort < 1 || pairingPort > 65535 || !code.matches("[0-9]{6}")) {
-                                throw new IllegalArgumentException();
-                            }
-                        } else if (!preferences.getBoolean("adb_paired", false)) {
-                            throw new IllegalArgumentException();
-                        }
-                        if (!connectText.isEmpty()) {
-                            connectionPort = Integer.parseInt(connectText);
-                            if (connectionPort < 1 || connectionPort > 65535) {
-                                throw new IllegalArgumentException();
-                            }
-                        }
-                    } catch (IllegalArgumentException error) {
-                        pairPort.setError("페어링 화면의 포트와 6자리 코드를 확인해 주세요.");
-                        return;
-                    }
-                    int requestedPairPort = pairingPort;
-                    int requestedConnectPort = connectionPort;
-                    setup.dismiss();
-                    busy = true;
-                    statusMessage = "이 휴대폰의 무선 디버깅에 연결하고 있습니다.";
-                    refresh.run();
-                    worker.execute(() -> {
-                        String errorMessage = null;
-                        try {
-                            if (adb == null) {
-                                adb = new WirelessAdbManager(getApplicationContext());
-                            }
-                            if (requestedPairPort > 0) {
-                                if (!adb.pair("127.0.0.1", requestedPairPort, code)) {
-                                    throw new IllegalStateException("페어링에 실패했습니다.");
-                                }
-                                if (!preferences.edit().putBoolean("adb_paired", true).commit()) {
-                                    throw new IllegalStateException("페어링 결과를 저장하지 못했습니다.");
-                                }
-                            }
-                            preferences.edit().putInt("adb_connect_port", requestedConnectPort).commit();
-                        } catch (Exception | LinkageError error) {
-                            errorMessage = error.getMessage() == null
-                                    ? error.getClass().getSimpleName() : error.getMessage();
-                        }
-                        String error = errorMessage;
-                        main.post(() -> {
-                            if (closing || isDestroyed()) {
-                                return;
-                            }
-                            busy = false;
-                            if (error == null) {
-                                requestedAction = "status";
-                                runCommand.run();
-                            } else {
-                                statusMessage = "페어링 실패 · " + error;
-                                refresh.run();
-                                new AlertDialog.Builder(this).setTitle("연결 실패")
-                                        .setMessage(error + "\n\n설정의 페어링 코드 화면을 열어 둔 상태에서 새 코드로 다시 연결해 주세요.")
-                                        .setPositiveButton("확인", null).show();
-                            }
-                        });
-                    });
-                });
-            });
-            setup.show();
+            if (!hasWifi) {
+                new AlertDialog.Builder(this).setTitle("Wi-Fi 연결이 필요합니다")
+                        .setMessage("무선 디버깅은 Wi-Fi에 연결되어 있어야 켤 수 있습니다.")
+                        .setPositiveButton("Wi-Fi 설정", (dialog, which) -> startActivity(
+                                new Intent(Settings.ACTION_WIFI_SETTINGS)))
+                        .setNegativeButton("닫기", null).show();
+                return;
+            }
+            if (preferences.getBoolean("adb_paired", false)) {
+                new AlertDialog.Builder(this).setTitle("시스템 연결")
+                        .setMessage("이미 페어링했다면 다시 연결을 누르세요. 휴대폰 설정에서 페어링을 삭제했다면 새로 연결하세요.")
+                        .setPositiveButton("다시 연결", (dialog, which) -> {
+                            requestedAction = "status";
+                            runCommand.run();
+                        }).setNeutralButton("새로 연결", (dialog, which) -> startActivity(
+                                new Intent(this, PairingActivity.class)))
+                        .setNegativeButton("닫기", null).show();
+            } else {
+                startActivity(new Intent(this, PairingActivity.class));
+            }
         });
 
         diagnosticsButton.setOnClickListener(view -> {
@@ -482,7 +399,7 @@ public final class MainActivity extends Activity {
                 runCommand.run();
                 return;
             }
-            String message = "패키지: " + getPackageName() + "\n버전: 1.1 / 2"
+            String message = "패키지: " + getPackageName() + "\n버전: 1.2 / 3"
                     + "\n기기: " + Build.MANUFACTURER + " " + Build.MODEL
                     + "\nAndroid API: " + Build.VERSION.SDK_INT
                     + "\n이어폰 연결: " + connected
@@ -490,6 +407,9 @@ public final class MainActivity extends Activity {
                     + "\n설정: " + (preferences.getBoolean("phone_mic_enabled", false) ? "ON" : "OFF")
                     + "\n복원 정보: " + preferences.contains("routing_backup")
                     + "\n\n" + statusMessage + "\n\n"
+                    + (preferences.contains("last_pair_error")
+                    ? "페어링 오류: " + preferences.getString("last_pair_error", "")
+                    + "\n접속 주소: " + preferences.getString("last_pair_endpoint", "") + "\n\n" : "")
                     + preferences.getString("last_diagnostics", "시스템 경로 확인 기록 없음");
             new AlertDialog.Builder(this).setTitle("연결 상태 · 오류")
                     .setMessage(message)

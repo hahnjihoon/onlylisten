@@ -1,4 +1,4 @@
-OnlyListen 1.1 third-party components
+OnlyListen 1.2 third-party components
 
 LibADB Android 3.1.1
 Copyright Muntashir Al-Islam

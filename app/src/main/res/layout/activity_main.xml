@@ -40,6 +40,6 @@
         <Button android:id="@+id/diagnostics_button" style="@style/ActionButton"
             android:backgroundTint="@color/surface" android:textColor="@color/muted" android:text="연결 상태 · 오류 확인" />
         <TextView style="@style/Caption" android:layout_marginTop="16dp" android:gravity="center"
-            android:text="1.1 시험 버전 · com.onlylisten.app\n녹음하거나 통화 내용을 저장하지 않습니다." android:textSize="11sp" />
+            android:text="1.2 시험 버전 · com.onlylisten.app\n녹음하거나 통화 내용을 저장하지 않습니다." android:textSize="11sp" />
     </LinearLayout>
 </ScrollView>
