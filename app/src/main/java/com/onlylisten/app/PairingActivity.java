@@ -82,7 +82,8 @@ public final class PairingActivity extends Activity {
         heading.setTextColor(getColor(R.color.text));
         content.addView(heading);
         TextView instructions = new TextView(this);
-        instructions.setText("1. 아래 버튼으로 설정을 앱 옆에 여세요.\n"
+        instructions.setText("최초 연결과 제어 시작 때 Wi-Fi와 무선 디버깅이 필요합니다. 시작 후에는 휴대폰 내부 제어를 사용합니다.\n\n"
+                + "1. 아래 버튼으로 설정을 앱 옆에 여세요.\n"
                 + "2. 무선 디버깅 → 페어링 코드로 기기 페어링을 누르세요.\n"
                 + "3. 설정의 코드 창을 유지한 채 이 앱에 숫자 6자리를 입력하고 연결을 누르세요.\n\n"
                 + "코드와 페어링 포트는 창을 열 때마다 바뀝니다. 창을 닫으면 이전 번호는 사용할 수 없습니다.\n\n"

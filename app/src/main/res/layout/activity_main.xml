@@ -33,13 +33,13 @@
         <LinearLayout style="@style/Card" android:layout_marginTop="16dp">
             <TextView style="@style/Heading" android:text="처음 사용할 때" />
             <TextView style="@style/Caption" android:layout_marginTop="12dp"
-                android:text="시즈쿠 등 별도 앱을 설치하지 않습니다. 최초 연결 설정에서 휴대폰의 무선 디버깅에 이 앱을 연결해 주세요.\n\n기기와 안드로이드 버전에 따라 마이크 지정이 거부되거나 통화 중 실제 경로가 다를 수 있는 시험 버전입니다. ON으로 바뀐 뒤 상대방과 통화하며 휴대폰 마이크가 쓰이는지 확인해 주세요.\n\n앱을 닫아도 변경한 오디오 설정은 남을 수 있습니다. 사용을 마치거나 앱을 삭제하기 전에 OFF로 복원해 주세요." />
+                android:text="시즈쿠 등 별도 앱을 설치하지 않습니다. 최초 권한 연결과 제어 시작 때 Wi-Fi와 무선 디버깅을 사용합니다. 시작이 끝나면 휴대폰 내부에서 명령을 처리하므로 제어 프로세스가 유지되는 동안 Wi-Fi 없이 ON/OFF할 수 있습니다.\n\n휴대폰을 재부팅하거나 운영체제가 제어 프로세스를 종료하면 Wi-Fi에서 다시 시작해야 합니다. 앱을 업데이트한 뒤에도 다시 시작이 필요할 수 있습니다.\n\n기기와 안드로이드 버전에 따라 마이크 지정이 거부되거나 통화 중 실제 경로가 다를 수 있는 시험 버전입니다. ON으로 바뀐 뒤 상대방과 통화하며 휴대폰 마이크가 쓰이는지 확인해 주세요.\n\n앱을 닫아도 변경한 오디오 설정은 남을 수 있습니다. 사용을 마치거나 앱을 삭제하기 전에 OFF로 복원해 주세요." />
         </LinearLayout>
         <Button android:id="@+id/bluetooth_button" style="@style/ActionButton" android:layout_marginTop="12dp"
             android:backgroundTint="@color/surface" android:textColor="@color/accent" android:text="블루투스 설정" />
         <Button android:id="@+id/diagnostics_button" style="@style/ActionButton"
             android:backgroundTint="@color/surface" android:textColor="@color/muted" android:text="연결 상태 · 오류 확인" />
         <TextView style="@style/Caption" android:layout_marginTop="16dp" android:gravity="center"
-            android:text="1.2 시험 버전 · com.onlylisten.app\n녹음하거나 통화 내용을 저장하지 않습니다." android:textSize="11sp" />
+            android:text="1.4 시험 버전 · com.onlylisten.app\n녹음하거나 통화 내용을 저장하지 않습니다." android:textSize="11sp" />
     </LinearLayout>
 </ScrollView>

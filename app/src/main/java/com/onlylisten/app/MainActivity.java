@@ -33,8 +33,15 @@ import android.widget.TextView;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -42,6 +49,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 
 import io.github.muntashirakon.adb.AdbStream;
 
@@ -195,80 +205,231 @@ public final class MainActivity extends Activity {
             worker.execute(() -> {
                 JSONObject reply = null;
                 String failure = null;
+                String commandStage = "connect";
                 WifiManager.MulticastLock multicast = null;
                 try {
-                    if (adb == null) {
-                        adb = new WirelessAdbManager(getApplicationContext());
-                    }
-                    if (!adb.isConnected()) {
-                        WifiManager wifi = getApplicationContext().getSystemService(WifiManager.class);
-                        if (wifi != null) {
-                            multicast = wifi.createMulticastLock("onlylisten-discovery");
-                            multicast.setReferenceCounted(false);
-                            multicast.acquire();
+                    String encodedSecret = preferences.getString("control_secret", "");
+                    byte[] controlSecret;
+                    int controlPort = preferences.getInt("control_port", -1);
+                    if (encodedSecret.isEmpty()) {
+                        controlSecret = new byte[32];
+                        new SecureRandom().nextBytes(controlSecret);
+                        encodedSecret = Base64.encodeToString(controlSecret, Base64.NO_WRAP);
+                        if (!preferences.edit().putString("control_secret", encodedSecret)
+                                .remove("control_port").commit()) {
+                            throw new IllegalStateException("휴대폰 내부 제어 인증 정보를 저장하지 못했습니다.");
                         }
-                        adb.connectTls(getApplicationContext(), 7000);
+                        controlPort = -1;
+                    } else {
+                        controlSecret = Base64.decode(encodedSecret, Base64.NO_WRAP);
+                        if (controlSecret.length != 32) {
+                            throw new IllegalStateException("휴대폰 내부 제어 인증 정보가 올바르지 않습니다.");
+                        }
                     }
-                    if (!adb.isConnected()) {
-                        throw new IllegalStateException("무선 디버깅 연결에 실패했습니다. 연결 설정에서 디버깅을 켜고 다시 연결해 주세요.");
+                    int boot = Settings.Global.getInt(getContentResolver(), Settings.Global.BOOT_COUNT, -1);
+                    if (preferences.getInt("control_boot", -2) != boot) {
+                        controlPort = -1;
                     }
+                    SecretKeySpec key = new SecretKeySpec(controlSecret, "HmacSHA256");
+                    String sourceApk = getApplicationInfo().sourceDir;
+                    boolean startedControl = false;
                     String backup = preferences.getString("routing_backup", "");
                     String[] stages = action.equals("on") && backup.isEmpty()
-                            ? new String[]{"snapshot", "on"} : new String[]{action};
+                            ? new String[]{"ping", "snapshot", "on"} : new String[]{"ping", action};
                     for (String stage : stages) {
-                        String apk = "'" + getApplicationInfo().sourceDir.replace("'", "'\\''") + "'";
-                        String command = "CLASSPATH=" + apk
-                                + " app_process /system/bin com.onlylisten.app.AudioRouteCommand " + stage;
+                        commandStage = stage;
+                        JSONObject request = new JSONObject().put("action", stage).put("apkPath", sourceApk);
                         if (stage.equals("on") || stage.equals("off")) {
                             if (backup.isEmpty()) {
                                 throw new IllegalStateException("복원할 원래 설정이 없습니다.");
                             }
-                            command += " " + Base64.encodeToString(backup.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
+                            request.put("backup", Base64.encodeToString(backup.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP));
                         }
-                        AdbStream stream = adb.openStream("shell:" + command);
-                        ScheduledFuture<?> timeout = timeouts.schedule(() -> {
-                            try {
-                                stream.close();
-                            } catch (Exception ignored) {
-                            }
-                        }, 20, TimeUnit.SECONDS);
-                        String output;
-                        try (stream; InputStream input = stream.openInputStream();
-                             ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
-                            byte[] buffer = new byte[4096];
-                            int count;
-                            while (true) {
-                                try {
-                                    count = input.read(buffer);
-                                } catch (java.io.IOException closed) {
-                                    if (stream.isClosed()) {
-                                        break;
+                        byte[] requestBytes = request.toString().getBytes(StandardCharsets.UTF_8);
+                        if (requestBytes.length > 65536) {
+                            throw new IllegalArgumentException("내부 제어 요청이 너무 큽니다.");
+                        }
+                        for (int attempt = 0; attempt < 2; attempt++) {
+                            if (stage.equals("ping") && (controlPort < 1 || attempt == 1)) {
+                                commandStage = "start_control";
+                                preferences.edit().putBoolean("control_ready", false).apply();
+                                ConnectivityManager networks = getSystemService(ConnectivityManager.class);
+                                boolean hasWifi = false;
+                                if (networks != null) {
+                                    for (Network network : networks.getAllNetworks()) {
+                                        NetworkCapabilities capabilities = networks.getNetworkCapabilities(network);
+                                        if (capabilities != null && capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                                            hasWifi = true;
+                                            break;
+                                        }
                                     }
-                                    throw closed;
                                 }
-                                if (count == -1) {
-                                    break;
+                                if (!hasWifi) {
+                                    throw new IllegalStateException("휴대폰 내부 제어 프로세스가 실행되어 있지 않습니다. Wi-Fi에 연결해 한 번 시작하면 이후에는 Wi-Fi 없이 ON/OFF할 수 있습니다. 재부팅하거나 제어 프로세스가 종료되면 다시 시작해야 합니다.");
                                 }
-                                bytes.write(buffer, 0, count);
-                                if (bytes.size() > 131072) {
-                                    throw new IllegalStateException("시스템 응답이 너무 큽니다.");
+                                if (adb == null) {
+                                    adb = new WirelessAdbManager(getApplicationContext());
+                                } else {
+                                    adb.disconnect();
+                                }
+                                WifiManager wifi = getApplicationContext().getSystemService(WifiManager.class);
+                                if (wifi != null) {
+                                    multicast = wifi.createMulticastLock("onlylisten-discovery");
+                                    multicast.setReferenceCounted(false);
+                                    multicast.acquire();
+                                }
+                                try {
+                                    adb.connectTls(getApplicationContext(), 7000);
+                                    if (!adb.isConnected()) {
+                                        throw new IllegalStateException("제어 프로세스를 시작할 권한에 연결하지 못했습니다. 무선 디버깅을 켜고 다시 연결해 주세요.");
+                                    }
+                                    String apk = "'" + sourceApk.replace("'", "'\\''") + "'";
+                                    String command = "CLASSPATH=" + apk
+                                            + " /system/bin/toybox setsid /system/bin/app_process /system/bin"
+                                            + " --nice-name=onlylisten_audio_control com.onlylisten.app.AudioControlDaemon";
+                                    AdbStream stream = adb.openStream("shell:" + command);
+                                    ScheduledFuture<?> timeout = timeouts.schedule(() -> {
+                                        try {
+                                            stream.close();
+                                        } catch (Exception ignored) {
+                                        }
+                                    }, 20, TimeUnit.SECONDS);
+                                    String output;
+                                    try (stream; InputStream input = stream.openInputStream();
+                                         ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
+                                        OutputStream configuration = stream.openOutputStream();
+                                        configuration.write((encodedSecret + "\n").getBytes(StandardCharsets.US_ASCII));
+                                        configuration.flush();
+                                        byte[] buffer = new byte[1024];
+                                        int count;
+                                        while (true) {
+                                            try {
+                                                count = input.read(buffer);
+                                            } catch (java.io.IOException closed) {
+                                                if (stream.isClosed()) {
+                                                    break;
+                                                }
+                                                throw closed;
+                                            }
+                                            if (count == -1) {
+                                                break;
+                                            }
+                                            bytes.write(buffer, 0, count);
+                                            if (bytes.size() > 8192) {
+                                                throw new IllegalStateException("내부 제어 시작 응답이 너무 큽니다.");
+                                            }
+                                        }
+                                        output = bytes.toString(StandardCharsets.UTF_8.name());
+                                    } finally {
+                                        timeout.cancel(false);
+                                    }
+                                    int marker = output.lastIndexOf("ONLYLISTEN_CONTROL:");
+                                    if (marker < 0) {
+                                        throw new IllegalStateException("휴대폰 내부 제어 프로세스가 시작되지 않았습니다.");
+                                    }
+                                    JSONObject ready = new JSONObject(output.substring(marker + "ONLYLISTEN_CONTROL:".length())
+                                            .split("\\r?\\n", 2)[0]);
+                                    if (!ready.optBoolean("ok")) {
+                                        throw new IllegalStateException(ready.optString("error", "내부 제어 프로세스를 시작하지 못했습니다."));
+                                    }
+                                    controlPort = ready.getInt("port");
+                                    int uid = ready.optInt("uid", -1);
+                                    if (ready.optInt("protocol") != 1 || !sourceApk.equals(ready.optString("apkPath"))
+                                            || (uid != 2000 && uid != 0) || controlPort < 1 || controlPort > 65535) {
+                                        throw new IllegalStateException("휴대폰 내부 제어 시작 정보를 확인하지 못했습니다.");
+                                    }
+                                    if (!preferences.edit().putInt("control_port", controlPort)
+                                            .putInt("control_boot", boot).commit()) {
+                                        throw new IllegalStateException("휴대폰 내부 제어 연결 정보를 저장하지 못했습니다.");
+                                    }
+                                    startedControl = true;
+                                } finally {
+                                    adb.disconnect();
+                                    if (multicast != null && multicast.isHeld()) {
+                                        multicast.release();
+                                    }
+                                    multicast = null;
                                 }
                             }
-                            output = bytes.toString(StandardCharsets.UTF_8.name());
-                        } finally {
-                            timeout.cancel(false);
-                        }
-                        int marker = output.lastIndexOf("ONLYLISTEN_RESULT:");
-                        if (marker < 0) {
-                            String detail = output.trim();
-                            if (detail.length() > 1000) {
-                                detail = detail.substring(detail.length() - 1000);
+                            commandStage = stage;
+                            try (Socket socket = new Socket()) {
+                                socket.connect(new InetSocketAddress("127.0.0.1", controlPort), 700);
+                                socket.setSoTimeout(4000);
+                                ScheduledFuture<?> deadline = timeouts.schedule(() -> {
+                                    try {
+                                        socket.close();
+                                    } catch (Exception ignored) {
+                                    }
+                                }, 27, TimeUnit.SECONDS);
+                                try (DataInputStream input = new DataInputStream(socket.getInputStream());
+                                     DataOutputStream output = new DataOutputStream(socket.getOutputStream())) {
+                                    byte[] clientNonce = new byte[32];
+                                    new SecureRandom().nextBytes(clientNonce);
+                                    output.write(clientNonce);
+                                    output.flush();
+                                    byte[] serverNonce = new byte[32];
+                                    byte[] signature = new byte[32];
+                                    input.readFully(serverNonce);
+                                    input.readFully(signature);
+                                    Mac authentication = Mac.getInstance("HmacSHA256");
+                                    authentication.init(key);
+                                    authentication.update("OnlyListen server v1".getBytes(StandardCharsets.US_ASCII));
+                                    authentication.update(clientNonce);
+                                    authentication.update(serverNonce);
+                                    if (!MessageDigest.isEqual(authentication.doFinal(), signature)) {
+                                        throw new SecurityException("휴대폰 내부 제어 프로세스의 인증을 확인하지 못했습니다.");
+                                    }
+                                    authentication.reset();
+                                    authentication.update("OnlyListen request v1".getBytes(StandardCharsets.US_ASCII));
+                                    authentication.update(clientNonce);
+                                    authentication.update(serverNonce);
+                                    authentication.update(requestBytes);
+                                    output.writeInt(requestBytes.length);
+                                    output.write(requestBytes);
+                                    output.write(authentication.doFinal());
+                                    output.flush();
+                                    socket.setSoTimeout(25000);
+                                    int size = input.readInt();
+                                    if (size < 2 || size > 131072) {
+                                        throw new IllegalStateException("휴대폰 내부 제어 응답 크기가 올바르지 않습니다.");
+                                    }
+                                    byte[] responseBytes = new byte[size];
+                                    input.readFully(responseBytes);
+                                    input.readFully(signature);
+                                    authentication.reset();
+                                    authentication.update("OnlyListen response v1".getBytes(StandardCharsets.US_ASCII));
+                                    authentication.update(clientNonce);
+                                    authentication.update(serverNonce);
+                                    authentication.update(responseBytes);
+                                    if (!MessageDigest.isEqual(authentication.doFinal(), signature)) {
+                                        throw new SecurityException("휴대폰 내부 제어 응답의 인증이 일치하지 않습니다.");
+                                    }
+                                    reply = new JSONObject(new String(responseBytes, StandardCharsets.UTF_8));
+                                    if (stage.equals("ping") && (!reply.optBoolean("ok")
+                                            || reply.optInt("protocol") != 1 || !sourceApk.equals(reply.optString("apkPath")))) {
+                                        throw new IllegalStateException("휴대폰 내부 제어 프로세스를 다시 시작해야 합니다.");
+                                    }
+                                } finally {
+                                    deadline.cancel(false);
+                                }
+                            } catch (Exception error) {
+                                preferences.edit().putBoolean("control_ready", false).apply();
+                                if (stage.equals("ping") && attempt == 0 && !startedControl) {
+                                    continue;
+                                }
+                                throw error;
                             }
-                            throw new IllegalStateException("오디오 제어 코드가 응답하지 않았습니다. " + detail);
+                            break;
                         }
-                        reply = new JSONObject(output.substring(marker + "ONLYLISTEN_RESULT:".length())
-                                .split("\\r?\\n", 2)[0]);
-                        preferences.edit().putString("last_diagnostics", reply.toString()).commit();
+                        if (stage.equals("ping")) {
+                            preferences.edit().putBoolean("control_ready", true)
+                                    .putString("last_control_connection", reply.toString()).apply();
+                            continue;
+                        }
+                        reply.put("requestedAction", action);
+                        reply.put("command", stage);
+                        preferences.edit().putString(action.equals("status")
+                                ? "last_status_diagnostics" : "last_diagnostics", reply.toString()).commit();
                         if (!reply.optBoolean("ok")) {
                             if (stage.equals("on") && (reply.optBoolean("rolledBack")
                                     || !reply.optBoolean("changed", true))) {
@@ -301,6 +462,16 @@ public final class MainActivity extends Activity {
                         multicast.release();
                     }
                 }
+                if (!action.equals("status")) {
+                    if (failure != null) {
+                        preferences.edit().putString("last_control_error",
+                                "요청: " + action + "\n단계: " + commandStage + "\n" + failure)
+                                .putString("last_control_error_action", action).commit();
+                    } else if (action.equals(preferences.getString("last_control_error_action", ""))) {
+                        preferences.edit().remove("last_control_error")
+                                .remove("last_control_error_action").commit();
+                    }
+                }
                 String problem = failure;
                 JSONObject result = reply;
                 main.post(() -> {
@@ -312,7 +483,12 @@ public final class MainActivity extends Activity {
                         statusMessage = "처리 실패 · " + problem;
                         new AlertDialog.Builder(this).setTitle("설정하지 못했습니다")
                                 .setMessage(problem)
-                                .setPositiveButton("연결 설정", (dialog, which) -> setupButton.performClick())
+                                .setPositiveButton("오류 복사", (dialog, which) -> {
+                                    ClipboardManager clipboard = getSystemService(ClipboardManager.class);
+                                    clipboard.setPrimaryClip(ClipData.newPlainText("OnlyListen 오류",
+                                            "패키지: " + getPackageName() + "\n요청: " + action + "\n" + problem));
+                                })
+                                .setNeutralButton("연결 설정", (dialog, which) -> setupButton.performClick())
                                 .setNegativeButton("닫기", null).show();
                     } else if (action.equals("on")) {
                         int selectedInput = result == null ? -1 : result.optInt("selectedInputType", -1);
@@ -322,11 +498,14 @@ public final class MainActivity extends Activity {
                     } else if (action.equals("off")) {
                         statusMessage = "원래 통화 설정으로 복원했습니다.";
                     } else {
-                        statusMessage = "시스템 연결과 오디오 제어 권한을 확인했습니다.";
-                        diagnosticsButton.setTag(Boolean.TRUE);
+                        statusMessage = preferences.contains("last_control_error")
+                                ? "휴대폰 내부 제어에 연결했습니다. 이전 기능 오류 기록이 남아 있습니다."
+                                : "휴대폰 내부 제어와 오디오 제어 권한을 확인했습니다.";
                         diagnosticsButton.performClick();
                     }
-                    preferences.edit().putString("last_result", statusMessage).apply();
+                    if (!action.equals("status") || !preferences.contains("last_control_error")) {
+                        preferences.edit().putString("last_result", statusMessage).apply();
+                    }
                     refresh.run();
                 });
             });
@@ -369,22 +548,31 @@ public final class MainActivity extends Activity {
                     }
                 }
             }
-            if (!hasWifi) {
+            if (!hasWifi && !preferences.getBoolean("adb_paired", false)) {
                 new AlertDialog.Builder(this).setTitle("Wi-Fi 연결이 필요합니다")
-                        .setMessage("무선 디버깅은 Wi-Fi에 연결되어 있어야 켤 수 있습니다.")
+                        .setMessage("최초 권한 연결과 제어 프로세스 시작에는 Wi-Fi가 필요합니다. 시작한 뒤에는 제어 프로세스가 유지되는 동안 Wi-Fi 없이 사용할 수 있습니다.")
                         .setPositiveButton("Wi-Fi 설정", (dialog, which) -> startActivity(
                                 new Intent(Settings.ACTION_WIFI_SETTINGS)))
                         .setNegativeButton("닫기", null).show();
                 return;
             }
+            boolean wifiConnected = hasWifi;
             if (preferences.getBoolean("adb_paired", false)) {
                 new AlertDialog.Builder(this).setTitle("시스템 연결")
-                        .setMessage("이미 페어링했다면 다시 연결을 누르세요. 휴대폰 설정에서 페어링을 삭제했다면 새로 연결하세요.")
+                        .setMessage("다시 연결은 실행 중인 휴대폰 내부 제어에 먼저 연결합니다. 재부팅 등으로 종료된 경우에만 Wi-Fi와 무선 디버깅으로 다시 시작합니다. 페어링을 삭제했다면 새로 연결하세요.")
                         .setPositiveButton("다시 연결", (dialog, which) -> {
                             requestedAction = "status";
                             runCommand.run();
-                        }).setNeutralButton("새로 연결", (dialog, which) -> startActivity(
-                                new Intent(this, PairingActivity.class)))
+                        }).setNeutralButton("새로 연결", (dialog, which) -> {
+                            if (wifiConnected) {
+                                startActivity(new Intent(this, PairingActivity.class));
+                            } else {
+                                new AlertDialog.Builder(this).setTitle("최초 권한 연결에는 Wi-Fi가 필요합니다")
+                                        .setPositiveButton("Wi-Fi 설정", (wifiDialog, button) -> startActivity(
+                                                new Intent(Settings.ACTION_WIFI_SETTINGS)))
+                                        .setNegativeButton("닫기", null).show();
+                            }
+                        })
                         .setNegativeButton("닫기", null).show();
             } else {
                 startActivity(new Intent(this, PairingActivity.class));
@@ -392,31 +580,36 @@ public final class MainActivity extends Activity {
         });
 
         diagnosticsButton.setOnClickListener(view -> {
-            if (Boolean.TRUE.equals(diagnosticsButton.getTag())) {
-                diagnosticsButton.setTag(null);
-            } else if (preferences.getBoolean("adb_paired", false) && !busy) {
-                requestedAction = "status";
-                runCommand.run();
-                return;
-            }
-            String message = "패키지: " + getPackageName() + "\n버전: 1.2 / 3"
+            String message = "패키지: " + getPackageName() + "\n버전: 1.4 / 5"
                     + "\n기기: " + Build.MANUFACTURER + " " + Build.MODEL
                     + "\nAndroid API: " + Build.VERSION.SDK_INT
                     + "\n이어폰 연결: " + connected
                     + "\n내장 디버깅 페어링: " + preferences.getBoolean("adb_paired", false)
+                    + "\n최근 내부 제어 연결 확인: " + preferences.getBoolean("control_ready", false)
                     + "\n설정: " + (preferences.getBoolean("phone_mic_enabled", false) ? "ON" : "OFF")
                     + "\n복원 정보: " + preferences.contains("routing_backup")
                     + "\n\n" + statusMessage + "\n\n"
+                    + (preferences.contains("last_control_error")
+                    ? "최근 기능 오류:\n" + preferences.getString("last_control_error", "") + "\n\n" : "")
                     + (preferences.contains("last_pair_error")
                     ? "페어링 오류: " + preferences.getString("last_pair_error", "")
                     + "\n접속 주소: " + preferences.getString("last_pair_endpoint", "") + "\n\n" : "")
-                    + preferences.getString("last_diagnostics", "시스템 경로 확인 기록 없음");
-            new AlertDialog.Builder(this).setTitle("연결 상태 · 오류")
+                    + "최근 기능 응답:\n" + preferences.getString("last_diagnostics", "시스템 경로 확인 기록 없음")
+                    + "\n\n최근 연결 조회:\n" + preferences.getString("last_status_diagnostics", "연결 조회 기록 없음")
+                    + "\n\n내부 제어 연결:\n" + preferences.getString("last_control_connection", "내부 제어 확인 기록 없음");
+            AlertDialog.Builder diagnostics = new AlertDialog.Builder(this).setTitle("연결 상태 · 오류")
                     .setMessage(message)
                     .setPositiveButton("복사", (dialog, which) -> {
                         ClipboardManager clipboard = getSystemService(ClipboardManager.class);
                         clipboard.setPrimaryClip(ClipData.newPlainText("OnlyListen 상태", message));
-                    }).setNegativeButton("닫기", null).show();
+                    }).setNegativeButton("닫기", null);
+            if (preferences.getBoolean("adb_paired", false) && !busy) {
+                diagnostics.setNeutralButton("연결 조회", (dialog, which) -> {
+                    requestedAction = "status";
+                    runCommand.run();
+                });
+            }
+            diagnostics.show();
         });
         findViewById(R.id.bluetooth_button).setOnClickListener(view -> {
             try {
