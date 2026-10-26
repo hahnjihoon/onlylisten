@@ -1,0 +1,19 @@
+OnlyListen 1.1 third-party components
+
+LibADB Android 3.1.1
+Copyright Muntashir Al-Islam
+https://github.com/MuntashirAkon/libadb-android
+Apache-2.0 option selected.
+
+SPAKE2 Android 2.2.1
+Copyright Muntashir Al-Islam
+https://github.com/MuntashirAkon/spake2-java/tree/2.2.1
+LGPL-3.0. Corresponding library source is available at the versioned URL above.
+
+Conscrypt Android 2.5.3
+https://github.com/google/conscrypt/tree/2.5.3
+Apache-2.0 and included third-party notices.
+
+Bouncy Castle 1.81
+https://github.com/bcgit/bc-java/tree/r1rv81
+Bouncy Castle license.

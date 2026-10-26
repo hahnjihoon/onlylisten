@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root" android:layout_width="match_parent" android:layout_height="match_parent"
+    android:background="@color/background" android:fillViewport="true" android:clipToPadding="false">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="vertical" android:gravity="center_horizontal" android:padding="24dp">
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginTop="12dp" android:text="ONLYLISTEN" android:textSize="13sp"
+            android:letterSpacing="0.22" android:textColor="@color/accent" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="24dp" android:text="듣기는 이어폰으로\n말하기는 휴대폰으로"
+            android:textSize="28sp" android:lineSpacingExtra="6dp" android:gravity="center"
+            android:fontFamily="sans-serif-bold" android:textColor="@color/text" />
+        <TextView android:id="@+id/device_status" style="@style/Caption"
+            android:layout_marginTop="20dp" android:gravity="center" android:text="이어폰 연결 확인 중" />
+        <ImageButton android:id="@+id/power_button" android:layout_width="208dp" android:layout_height="208dp"
+            android:layout_marginTop="30dp" android:background="@drawable/bg_power" android:padding="65dp"
+            android:src="@drawable/ic_power" android:contentDescription="휴대폰 마이크 모드 켜기"
+            android:enabled="false" android:scaleType="fitCenter" android:tint="@color/text" />
+        <TextView android:id="@+id/power_state" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="22dp" android:gravity="center" android:fontFamily="sans-serif-bold"
+            android:letterSpacing="0.12" android:text="OFF" android:textColor="@color/muted" android:textSize="26sp" />
+        <TextView android:id="@+id/status_detail" style="@style/Caption" android:layout_marginTop="10dp"
+            android:gravity="center" android:accessibilityLiveRegion="polite"
+            android:text="이어폰이 연결됐을 때 전원 버튼을 사용할 수 있습니다." />
+        <Button android:id="@+id/setup_button" style="@style/ActionButton"
+            android:layout_marginTop="26dp" android:text="최초 연결 설정" />
+        <LinearLayout style="@style/Card" android:layout_marginTop="20dp">
+            <TextView style="@style/Heading" android:text="사용 방법" />
+            <TextView style="@style/Caption" android:layout_marginTop="12dp"
+                android:text="ON · 이어폰 통화 연결을 유지하면서 휴대폰 내장 마이크를 지정합니다.\n\nOFF · 앱이 바꾸기 전 통화 설정으로 복원합니다. 이후 연결된 기기는 휴대폰의 기본 통화 방식으로 선택됩니다.\n\n이어폰이 연결돼 있을 때만 ON/OFF 버튼을 누를 수 있습니다. 이어폰 선택은 휴대폰의 현재 통화 연결을 따릅니다." />
+        </LinearLayout>
+        <LinearLayout style="@style/Card" android:layout_marginTop="16dp">
+            <TextView style="@style/Heading" android:text="처음 사용할 때" />
+            <TextView style="@style/Caption" android:layout_marginTop="12dp"
+                android:text="시즈쿠 등 별도 앱을 설치하지 않습니다. 최초 연결 설정에서 휴대폰의 무선 디버깅에 이 앱을 연결해 주세요.\n\n기기와 안드로이드 버전에 따라 마이크 지정이 거부되거나 통화 중 실제 경로가 다를 수 있는 시험 버전입니다. ON으로 바뀐 뒤 상대방과 통화하며 휴대폰 마이크가 쓰이는지 확인해 주세요.\n\n앱을 닫아도 변경한 오디오 설정은 남을 수 있습니다. 사용을 마치거나 앱을 삭제하기 전에 OFF로 복원해 주세요." />
+        </LinearLayout>
+        <Button android:id="@+id/bluetooth_button" style="@style/ActionButton" android:layout_marginTop="12dp"
+            android:backgroundTint="@color/surface" android:textColor="@color/accent" android:text="블루투스 설정" />
+        <Button android:id="@+id/diagnostics_button" style="@style/ActionButton"
+            android:backgroundTint="@color/surface" android:textColor="@color/muted" android:text="연결 상태 · 오류 확인" />
+        <TextView style="@style/Caption" android:layout_marginTop="16dp" android:gravity="center"
+            android:text="1.1 시험 버전 · com.onlylisten.app\n녹음하거나 통화 내용을 저장하지 않습니다." android:textSize="11sp" />
+    </LinearLayout>
+</ScrollView>
